@@ -1,0 +1,269 @@
+---
+title: "CS 346: Final Project"
+subtitle: "Predicting `median_weekly_earn` using NN, RF, and SVM"
+author: "Megan Willis"
+date: "05/20/2021"
+output: 
+  html_document:
+    theme: readable
+    toc: true
+    toc_float: true
+    code_download: true
+---
+
+First, we will load all the packages we need for the whole project:
+```{r, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(fastDummies)
+library(arules)
+library(rsample)
+library(neuralnet)
+library(stringr)
+library(caret)
+library(yardstick)
+library(scales)
+library(randomForest)
+library(caTools)
+```
+
+Load Data from Github:
+```{r,  warning = FALSE, message = FALSE}
+earn <- readr::read_csv(
+  'https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-02-23/earn.csv')
+```
+
+# 1st Model: Neural Network
+
+First, we will perform data wrangling to get cleaner attributes.
+
+This includes selecting only specific rows of `sex` and `race`.
+
+The original dataset included other attributes that won't be used for any of the models.
+```{r}
+earn_new = earn %>% 
+  select(sex, race, year, age, median_weekly_earn) %>%
+  filter(sex %in% c("Men", "Women"),
+         race %in% c("Asian", "Black or African American", "White"))
+```
+
+
+Next, we have to scale `year`, since neural nets work best with scaled variables. As you can see, `year.scaled` consists of only variables between 0 and 1.
+```{r}
+earn_new$year.scaled = rescale(earn_new$year)
+
+summary(earn_new$year.scaled)
+```
+
+Because we are using neural net for classification (which is what it is most commonly used for), we have to turn the numeric target, `median_weekly_earn`, into categories. This can be done by using the `discretizeDF()` function. I decided to use k-means clustering, although there wasn't any particular reason why I chose this type. If I had more time, I would investigate this more, and try the models on the target discretized in the multiple different ways to see if it makes a difference in the model performance. 
+
+As you can see in the `summary()` function, there are the three classes, **low**, **medium**, and **high**, and different counts for each class. 
+```{r}
+earnDisc = discretizeDF(earn_new, methods = list(
+  median_weekly_earn = list(method = "cluster", breaks = 3, 
+    labels = c("low", "medium", "high"))),
+  default = list(method = "none")
+  )
+
+summary(earnDisc$median_weekly_earn) 
+```
+
+Next, I binned the categorical variables `sex` and `race`, as well as the target `median_weekly_earn`. Because neural nets need numeric data, binning the variables creates columns that will consist of binary numeric data (whether or not that observation has that attribute or not).
+
+This can be done using the `dummy_cols()` function from the `fastDummies` package.
+```{r}
+earnDiscNew = dummy_cols(earnDisc, select_columns = c("sex", "race", "median_weekly_earn"), #typically this is set to NULL, below aren't required
+           remove_first_dummy = FALSE,
+           remove_most_frequent_dummy = FALSE,
+           ignore_na = FALSE,
+           split = NULL,
+           remove_selected_columns = FALSE)
+```
+
+This chunk of code renames any column headers with spaces in them so they can be referenced in functions later on.
+```{r}
+names(earnDiscNew)<-str_replace_all(names(earnDiscNew), c(" " = "_" , "," = "" ))
+```
+
+Now, we can split the data (using 60% as training, and 40% as testing). We will do this using `initial_split()`.
+```{r}
+set.seed(11)
+
+split = initial_split(earnDiscNew, prop = .6)
+trainNN = training(split)
+testNN = testing(split)
+```
+
+Using the binned target variables (there are 3), and the 5 other binned variables, plus `year.scaled`, we can train a neural net. I went through a lot of trial and error to pick the number of hidden nodes, which activation function to chose, and whether or not **linear.output** would be true or false. Ultimately, having two layers of hidden nodes, with 5 and 4 in each, the activation function as logistic, and linear output as true, I had the best accuracy. It still wasn't great though, as you'll see. 
+```{r}
+set.seed(11)
+NN = neuralnet(median_weekly_earn_low + median_weekly_earn_medium + median_weekly_earn_high ~ sex_Men + sex_Women + race_Asian + race_Black_or_African_American + race_White + year.scaled, trainNN, hidden = c(5,4) , act.fct = "logistic", linear.output = T )
+```
+
+Here is a plot of the neural net with 6 input variables, predicting 3 target variables.
+```{r}
+plot(NN)
+```
+
+Now, here is a confusion matrix using the above neural net to generate predictions on the test data. 
+```{r}
+testNN = testNN[,c(1:12)]
+results <-compute(NN, testNN)
+prob <- results$net.result
+testF <- factor(ifelse(max.col(prob, "first")==1,'low',ifelse(max.col(prob, "first")==2,"medium","high")))
+    
+confusionMatrix(testF,testNN$median_weekly_earn)
+```
+
+The neural net predicted the classes in the test data with about 72% accuracy. And although this isn't great, this was the best accuracy I was able to obtain through adjusting different components of the neural net. Based on the confusion matrix, it seems to misclassify `median_weekly_earn` == "low" as "medium" the most. 
+
+# Random Forest
+
+For the random forest, I had tried to run a model, but it resulted in very poor accuracy (about 65%). I tried to adjust the cost within the model, which only made it worse. So, I decided to balance the data. Since the "high" class only had 272 observations, and that was the class that was being misclassified the most, I created a new dataset with an equal number of "low", "medium" and "high". That code is right below. I then went ahead and split the data into training and testing.
+```{r}
+set.seed(11)
+
+earn_rf = earnDisc %>% 
+  select(median_weekly_earn, sex, year, age)
+
+#earn_rf_new = earn_rf
+
+earn_rf_low = earn_rf %>% 
+  filter(median_weekly_earn == "low") %>% 
+  sample_n(272)
+
+earn_rf_medium = earn_rf %>% 
+  filter(median_weekly_earn == "medium") %>% 
+  sample_n(272)
+
+earn_rf_high = earn_rf %>% 
+  filter(median_weekly_earn == "high") %>% 
+  sample_n(272)
+
+earn_rf_balance = rbind(earn_rf_low, earn_rf_medium, earn_rf_high)
+
+earn_rf_balance %>% 
+  group_by(median_weekly_earn) %>% 
+  count()
+
+sample = sample.split(earn_rf_balance$median_weekly_earn, SplitRatio = .75)
+train = subset(earn_rf_balance, sample == TRUE)
+test  = subset(earn_rf_balance, sample == FALSE)
+```
+
+Now, as shown above, the distribution of the three classes is equal. 
+
+Now we can train a random forest, using the training data, with the type being classification since the target is categorical.
+```{r}
+rf <- randomForest(
+  median_weekly_earn ~ .,
+  data=train, type = "classification")
+
+rf
+```
+
+Below is where I made predictions using the testing data (using `predict()`).
+```{r}
+pred_rf_class = predict(rf, newdata=test[,-1])
+actual_rf_class = test$median_weekly_earn
+
+cm = table(actual_rf_class, pred_rf_class)
+cm
+
+accuracy_Test <- sum(diag(cm)) / sum(cm)
+accuracy_Test
+```
+
+As I mentioned before, before balancing the data, the model had an accuracy of about 65%. After balancing the data, the accuracy increased to about 71%. This is obviously still not great. One next step I would try would be to oversample the minority classes ("high" and "low"), since balancing decreased the size of the data by almost half. This could be why the model didn't improve significantly. 
+
+# SVM
+
+Because SVM needs numeric attributes as well, I used the same binned variables that I did for neural nets, and just selected the attributes I needed. Then, using `initial_split()` again, I split the data (`earn_svm`) into training and testing.
+
+```{r}
+library(e1071)
+```
+
+```{r}
+set.seed(11)
+
+earn_svm = earnDiscNew %>% 
+  select(sex_Men, sex_Women,race_Asian, race_White, race_Black_or_African_American, year.scaled, median_weekly_earn)
+
+svm_split = initial_split(earn_svm, prop = 0.7)
+svm_train = training(svm_split)
+svm_test = testing(svm_split)
+```
+
+Now, using the `svm()` function, I trained an svm model. It took lots of trial and error to determine which kernel was best, but I ultimately ended up choosing **radial** because it converged, and had the best accuracy.
+```{r}
+svmfit = svm(median_weekly_earn ~ . ,
+             data = svm_train,
+             kernel = "radial",
+             #degree = 5,
+             cost = 10,
+             scale = FALSE,
+             gamma = 1)
+```
+
+```{r}
+summary(svmfit)
+```
+
+Now, generate predictions:
+```{r}
+svm_preds <-predict(svmfit, svm_test[,-7])
+    
+confusionMatrix(svm_preds,svm_test$median_weekly_earn)
+```
+
+Once predictions were generated, and a confusion matrix was produced, we can see that this model has an accuracy of predicting the test data based on the trained model, of approximately 70%.
+
+However, I wanted to see if I could achieve a higher accuracy. So, like I did with the random forest, I balanced the data so the occurence of each target class was equal. 
+```{r}
+earn_svm_low = earn_svm %>% 
+  filter(median_weekly_earn == "low") %>% 
+  sample_n(272)
+
+earn_svm_med = earn_svm %>% 
+  filter(median_weekly_earn == "medium") %>% 
+  sample_n(272)
+
+earn_svm_high = earn_svm %>% 
+  filter(median_weekly_earn == "high") %>% 
+  sample_n(272)
+
+earn_svm_balance = rbind(earn_svm_low, earn_svm_med, earn_svm_high)
+```
+
+I was then able to split the new balanced data again, and train a new model, to see if the accuracy improved at all.
+```{r}
+set.seed(10)
+
+svm_split_b = initial_split(earn_svm_balance, prop = 0.7)
+svm_train_b = training(svm_split_b)
+svm_test_b = testing(svm_split_b)
+```
+
+```{r}
+svmfit_b = svm(median_weekly_earn ~ . ,
+             data = svm_train_b,
+             kernel = "radial",
+             #degree = 5,
+             cost = 1,
+             scale = FALSE,
+             gamma = 1)
+
+svm_preds_b <-predict(svmfit_b, svm_test_b[,-7])
+    
+confusionMatrix(svm_preds_b,svm_test_b$median_weekly_earn)
+```
+After balancing the data, the accuracy increased from ~70% to ~73%. Like I mentioned before, I think my next step would be to oversample the underrepresented classes so I don't end up reducing my data. 
+
+I also think that the k-means clustering method used to make breaks in the target in order to categorize `median_weekly_earn` may just not be the right choice. Finally, the next thing that I would work on is using feature selection to pull out important features. 
+
+I had trouble with some attributes, since some of the categories overlapped a ton (ex: for `age`, 16+, 16-24, 16-30 etc.) Those problematic attributes that couldn't be cleaned up were omitted. It is possible that they would have benefited all the models.
+
+
+
+# Sources
+https://www.oreilly.com/library/view/r-data-analysis/9781783989065/ch01s10.html
