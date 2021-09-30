@@ -1,0 +1,383 @@
+---
+title: "Project 1"
+output:
+  pdf_document: default
+  html_document:
+    code_folding: hide
+    theme: cosmo
+---
+# Megan Willis
+# C Code
+## Naive Bayes
+### Data: Using `chickwts` from base-R
+
+The `chickwts` data has two variables, `weight`, and `feed`
+The goal of this model is to predict `feed` type (target) based on `weight`.
+
+The data looks like this:
+```{r, warning = FALSE, message = FALSE}
+head(chickwts)
+```
+
+### The Attributes in `chickwts`
+
+The attributes, feed and weight, are categorical and numeric, respectively. These are the only two attributes in the dataset. For feed, there are 6 different categories. Those are:
+
+|  -horsebean
+|  -linseed
+|  -soybean
+|  -sunflower
+|  -meatmeal
+|  -casein
+
+
+For weight, the range of weights is (108, 423):
+```{r}
+range(chickwts$weight)
+```
+
+### Load Packages Needed For A, B, and C Code
+
+First, load any necessary packages to start off.
+```{r, warning = FALSE, message = FALSE}
+library(caret)  #for data splitting
+library(naivebayes)   #for fitting the classification model
+library(tidyverse)    # to clean the data
+library(e1071)
+library(rsample)
+library(dplyr)
+library(rpart.plot)
+library(tidymodels)
+```
+
+
+### Split the Data
+
+Split the `chickwts` dataset (with a proportion of 70/30) into training and testing sets.
+```{r, warning = FALSE, message = FALSE}
+set.seed(11)
+chick_split = initial_split(chickwts, prop = .7)
+chick_train = training(chick_split)
+chick_test = testing(chick_split)
+```
+
+### Fit the Model
+
+Fit a Naive Bayes model on the training data (`chick_train`) predicting `feed` based on `weight`.
+```{r, warning = FALSE, message = FALSE}
+nb_fit = train(feed~weight, data = chick_train, method = "naive_bayes")
+```
+
+### Generate Predictions
+Generate predictions on the testing set using the model fit to the training set.
+```{r, warning = FALSE, message = FALSE}
+#generate predictions using predict(...)
+p1_nb = predict(nb_fit, newdata = chick_test) 
+#reformat predictions from a vector to a data frame
+p1_nb = data.frame(lapply(p1_nb, as.character), stringsAsFactors=FALSE)
+ #flip rows and columns
+p1_nb = as.data.frame(t(p1_nb))
+#add an id row to prediction dataset, change name of column
+p1_nb = p1_nb %>% 
+  mutate(id = row_number()) %>%   
+  rename(pred_feed = V1)
+ #add an id row to the testing set
+chick_test = chick_test %>%  
+  mutate(id = row_number())
+#join the testing set and predictions by id
+p1_nb_chick_test = chick_test %>%   
+  inner_join(p1_nb, by = "id")
+```
+
+Although there wasn't much data munging to perform at the beginning when splitting the data, there was some reformatting done so the predictions could be visualized with the actual categories for `feed`.
+
+Here are the predictions along with the actual categories for `feed`:
+```{r, warning = FALSE, message = FALSE}
+p1_nb_chick_test %>% 
+  filter(id %in% c(1:6)) %>% 
+  select(weight, feed, pred_feed)
+```
+
+### Calculate the Accuracy of the Model
+
+```{r, warning = FALSE, message = FALSE}
+count = 0
+for (i in 1:(nrow(p1_nb_chick_test))) {
+  if (p1_nb_chick_test$feed[i] == p1_nb_chick_test$pred_feed[i]){count = count+1}
+}       #the for loop counts number of correct predictions
+print(count)  
+#calculate accuracy of naive bayes model
+accuracy_c = count/nrow(p1_nb_chick_test)  
+```
+The model resulted in an accuracy of 42.9%, which means that it accurately predicted the type of `feed` on the "never-before-seen" data 42.9% of the time (9/21 correct predictions).
+
+### Naive Bayes Model Output
+
+The model output can be found below:
+```{r, warning = FALSE, message = FALSE}
+nb_fit
+```
+To break down this output, we see that to it the model, we took 25 bootstrapped samples of 50 (which is the 50 from the training set). There are 6 classes to predict (6 feed types), and 1 predictor (weight). It fit the model with laplace = 0 as the default, and then fit models with usekernel = TRUE and FALSE, to see which method produced a more accurate model. Based on the accuracies in the middle table, usekernel = FALSE produced a more accurate model, so that is what it selected as the optimal model. Kappa is Cohen's Kappa Statistic, where a value of 1 equates to "perfect agreement" and a value of 0 equates to "no aggreement". Unfortunately, there isn't any way to find the probabilities of each class being predicted (how the model actually predicted each class) in R, or how it calculated those values.
+
+### Is this an appropriate model in the context of the `chickwts` data?
+
+Because we are trying to predict the type of feed a particular instance is given based on that instances weight, this is an easy classification problem. Naive Bayes is good for classification problems, because it just multiplies the probability of observing a certain attribute-value pair for each instance to train the model. The surface-layer math behind the algorithm is rather simple, which makes it a good and easy model to use. 
+
+# B Code
+## Naive Bayes With Real Data
+### Data: `earn` found at (https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-02-23/earn.csv)
+
+Import the data using `readr`.
+```{r, warning = FALSE, message = FALSE}
+earn <- readr::read_csv(
+  'https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-02-23/earn.csv')
+```
+
+### Exploratory Analysis
+
+Let's see if there is a relationship between sex and median weekly earning
+```{r, warning = FALSE, message = FALSE}
+earn %>% 
+  filter(sex %in% c("Men", "Women")) %>% 
+  group_by(sex) %>%
+  summarize(mean_earn = mean(median_weekly_earn))
+```
+Let's see if there's a relationship between median weekly earnings, race, year and sex.
+```{r, warning = FALSE, message = FALSE}
+earn %>% 
+  filter(sex %in% c("Men", "Women"), race %in% c("Asian", "Black or African American", "White")) %>% 
+  group_by(sex, year, race) %>%
+  summarize(mean_earn = mean(median_weekly_earn))
+
+earn %>% 
+  filter(sex %in% c("Men", "Women")) %>% 
+  group_by(race, sex) %>% 
+  summarize(mean_earn = mean(median_weekly_earn))
+
+earn %>% 
+  group_by(age) %>% 
+  summarize(mean_earn = mean(median_weekly_earn))
+```
+
+For each of the above attributes, there does appear to be differences in `median_weekly_earning` among the different groups.
+
+### Preliminary Data Munging (Balanced data?)
+
+Let's see if the data is balanced (are there enough of each `race`, `sex`, `age` etc.)
+```{r}
+earn %>% 
+  group_by(race) %>% 
+  count()
+
+earn %>% 
+  group_by(sex) %>% 
+  count()
+
+earn %>% 
+  group_by(age) %>% 
+  count()
+
+earn %>% 
+  group_by(year) %>% 
+  count()
+```
+The data is very well balanced. Aside from the `age` attribute, there are equal numbers of instances for the other three attributes. 
+
+### Create a Categorical Variable from a Numeric Variable
+
+Let's convert `median_weekly_earn` to a categorical variable (`weekly_earn_cut`)
+```{r, warning = FALSE, message = FALSE}
+range(earn$median_weekly_earn)  #find the range so we know where to make breaks
+
+#create categories for new variable
+earn$weekly_earn_cut = cut(earn$median_weekly_earn, 
+                          c(0, 500, 700, 900, 1100, 1300), 
+                          labels=c("0-500", "500-700", "700-900", "900-1100", "1100-1300+"))
+
+earn$weekly_earn_cut = as.character(earn$weekly_earn_cut) #convert to a character
+```
+
+### More Data Munging...
+
+```{r}
+earn_new = earn %>% 
+  select(sex, race, year, age, median_weekly_earn, weekly_earn_cut) %>%
+  filter(sex %in% c("Men", "Women"),
+         race %in% c("Asian", "Black or African American", "White")) %>% 
+  drop_na()
+#select columns we will use
+#filter for columns where sex is Men or Women, race is Asian, Black or African American, White
+#remove any columns with missing values (there aren't that many)
+```
+In regards to the data munging process, I didn't have to normalize any attributes, because the majority of the attributes in the `earn` dataset were categorical. There was one numeric attribute, `median_weekly_earn`, but the values were fairly straightforward, and within a reasonable range (318, 1709). There were a few missing values in the dataset (after performiong some exploratory data analysis, maybe 50) that there wasn't really a reason to worry about filling in the missing values for 50 instances when there were over 1300 instances in the data. I just used `drop_na()` to remove them. The data was also pretty evenly distributed, so there was no need to balance to data to account for imbalances. In fact, the number of instances for each class was equal for all attributes except `age`.
+
+Although I didn't change any categorical values to numeric, I did create a new attribute that was categorical *from* a numeric attribute the dataset already contained. I used `cut(...)` to make splits of the `median_weekly_earn` attribute, and created a new categorical variable `weekly_earn_cut` with those splits.
+
+### Split the Data and Fit the Model
+
+Now, let's create a Naive Bayes model to predict  `weekly_earn_cut` based on `sex`, `race`, `year` and `age`
+
+First, we must split the data (with a proportion of 70/30)
+```{r}
+set.seed(11)
+earn_split = initial_split(earn_new, prop = .7)
+earn_training = training(earn_split)
+earn_testing = testing(earn_split)
+```
+
+Now, using the same code from the C-code portion of the project, we will train the model using the training data (**data = earn_training**)
+```{r}
+earn_nb_fit = train(weekly_earn_cut~ sex + race + year + age, 
+                    data = earn_training, 
+                    method = "naive_bayes")
+```
+This code fits a model to the training data, predicting sex from **ALL** the variables in the dataset (`median_weekly_earn`, `race`, `year`, and `age`)
+
+### Generate Predictions on the Training Data; Calculate Accuracy
+
+First, we will generate predictions on the training data using the model fit with the training data. Then, calculate the accuracy of the predictions on the training set.
+```{r}
+set.seed(11)
+# Generate predictions
+earn_train_predict = predict(earn_nb_fit, newdata = earn_training)
+# reformat predictions
+earn_train_predict = data.frame(lapply(earn_train_predict, as.character), 
+                                stringsAsFactors=FALSE)
+earn_train_predict = as.data.frame(t(earn_train_predict)) #do the same as in the C code
+
+earn_train_predict = earn_train_predict %>% 
+  mutate(id = row_number()) %>% 
+  rename(earn_train_pred = V1)
+
+earn_training = earn_training %>% 
+  mutate(id = row_number())
+
+ earn_train_predict = earn_training%>% 
+  inner_join(earn_train_predict, by = "id")
+
+count_t = 0
+for (i in 1:(nrow(earn_train_predict))) {
+  if (earn_training$weekly_earn_cut[i] == earn_train_predict$earn_train_pred[i])
+    {count_t = count_t+1}
+}
+print(count_t)
+
+accuracy = count_t/nrow(earn_training)
+accuracy
+```
+Based on the training data, the model accurately predicts the class of `weekly_earn_cut` 50.4% of the time (454/901 correct predictions). This is not great, and it would definitely be a good idea to reconsider the model all-together. There is a possibility that this isn't the best model for the data, as you normally would expect a much higher accuracy when generating predictions on the data that was used to fit the model. 
+
+### Generate Predictions on Cross-Validation Data
+
+```{r}
+train_control <- trainControl(method = "repeatedcv", 
+                              number = 10, repeats = 3) # k=10, repeat 3 times
+
+cv_model = train(weekly_earn_cut~ sex + race + year + age , data = earn_new, 
+                method = "naive_bayes", 
+                trControl = train_control)
+
+print(cv_model)
+```
+
+The model using cross-validation had an accuracy of 47.9% (using usekernel = TRUE, seen in output above).
+
+It is important to generate predictions on the testing set. These predictions will give a better idea of how well the model will perform on "unseen data", in comparison to the training set (which reflects overly optimistic performance).
+
+### Generate Predictions on Testing Data and Calculate Accuracy
+
+Now we have to generate predictions on the testing set. This code is the same as predictions on the training data.
+```{r, warning = FALSE, message = FALSE}
+earn_predict = predict(earn_nb_fit, newdata = earn_testing)
+
+earn_predict = data.frame(lapply(earn_predict, as.character), stringsAsFactors=FALSE)
+earn_predict = as.data.frame(t(earn_predict)) #do the same as in the C code
+
+earn_predict = earn_predict %>% 
+  mutate(id = row_number()) %>% 
+  rename(earn_pred = V1)
+
+earn_testing = earn_testing %>% 
+  mutate(id = row_number())
+
+earn_predict_test = earn_testing %>% 
+  inner_join(earn_predict, by = "id")
+
+count = 0
+for (i in 1:(nrow(earn_predict_test))) {
+  if (earn_predict_test$weekly_earn_cut[i] == earn_predict_test$earn_pred[i]){count = count+1}
+}
+print(count)
+
+accuracy_b = count/nrow(earn_testing)
+accuracy_b
+```
+After generating predictions on the testing set (the "unseen data"), we see that the model accurately predicted the `weekly_earn_cut` 47.9% of the time (185/386 correct predictions).
+
+### Example Instances
+
+To examine a specific instance, let's see a correct prediction and an incorrect prediction made by the model.
+```{r, warning = FALSE, message = FALSE}
+# rows 16 and 17
+earn_predict_test %>% 
+  filter(id %in% c(16, 17)) %>% 
+  select(weekly_earn_cut, earn_pred, sex, race, year, age)
+```
+As you can see, the model correctly predicted the class of `weekly_earn_cut` for the first instance shown above, but it incorrectly predicted the class of the second instance.
+
+# A Code
+## Classification Tree
+### Data: Same as B-Code
+
+### Fit a Classification Tree on the Training Data
+
+```{r, warning = FALSE, message = FALSE}
+earn_tree_fit = decision_tree() %>% #use rpart to fit a decision tree to the training data
+  set_engine(engine = "rpart") %>% 
+  set_mode(mode = "classification") %>% #regression because target is numeric
+  fit(factor(weekly_earn_cut)~ sex + age + year + race, data = earn_training)
+
+earn_tree_fit
+```
+```{r, warning = FALSE, message = FALSE}
+rpart.plot(earn_tree_fit$fit, roundint = FALSE) #visualization of the decision tree
+```
+
+### Generate Predictions on Testing Data
+
+Generate predictions
+```{r, warning = FALSE, message = FALSE}
+earn_tree_pred = earn_tree_fit %>% 
+  predict(new_data = earn_testing)  #generate predictions on the testing set using the tree
+earn_tree_pred
+```
+Create a column with predictions for testing set on tree
+```{r, warning = FALSE, message = FALSE}
+earn_tree_pred = earn_testing %>%
+  select(weekly_earn_cut) %>% 
+  mutate(weekly_earn_cut_pred = earn_tree_pred$.pred_class) 
+head(earn_tree_pred)
+#add a column to compare predictions to actual values
+```
+
+### Calculate Accuracy; Compare Naive Bayes Model Accuracy to Classification Tree Model Accuracy
+
+Calculate the accuracy for the decision tree predicting `weekly_earn_cut` on the testing set
+```{r, warning = FALSE, message = FALSE}
+count_d = 0
+for (i in 1:(nrow(earn_testing))) {
+  if (earn_tree_pred$weekly_earn_cut[i] == earn_tree_pred$weekly_earn_cut_pred[i]){count_d = count_d+1}
+}
+print(count_d)
+
+accuracy_d = count_d/nrow(earn_testing)
+
+accuracy_d
+```
+The classification tree accurately predicted the class of `weekly_earn_cut` 79.5% of the time. 
+
+# Which Model is Better, Naive Bayes or Classification Tree?
+
+After computing the accuracy of both the **Naive Bayes** model and the **Classification Tree** on just the testing data (not using cross-validation, or other methods), the **Classification Tree** is the "better model" for the `earn` data, predicting `weekly_earn_cut`. 
+
+The Naive Bayes model had an accuracy of 47.9%, and the Classification Tree had an accuracy of 79.5%, which is clearly better. It would be good to check for overfitting, but in general, the tree is the better model for predicting `weekly_earn_cut`.
